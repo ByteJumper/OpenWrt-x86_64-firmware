@@ -3,7 +3,7 @@
 #
 # File: .github/workflows/test-builder.yml
 # Description: Build OpenWrt using GitHub Actions
-# Version: 1.1 (Two-step upload with artifact backup)
+# Version: 1.2 (Fixed YAML syntax)
 # 
 
 
