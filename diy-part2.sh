@@ -1,13 +1,9 @@
 #!/bin/bash
 #
-# https://github.com/P3TERX/Actions-OpenWrt
+# https://github.com/ByteJumper/OpenWrt-x86_64-firmware/edit/main/
 # File name: diy-part2.sh
 # Description: OpenWrt DIY script part 2 (After Update feeds)
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
+#Version: 1.0
 #
 
 # Modify default IP
@@ -25,6 +21,22 @@ sed -i 's/OpenWrt/mRouter/g' package/base-files/files/bin/config_generate
 if [ -d files ]; then
     chmod -R 755 files
 fi
+
+# ==========================================
+# 清理不需要的包（优雅方案）
+# ==========================================
+echo "==> Cleaning unwanted packages..."
+
+# passwall 全家桶
+find feeds -type d -name "*passwall*" -exec rm -rf {} + 2>/dev/null
+
+# autosamba（避免冲突）
+find feeds -type d -name "autosamba" -exec rm -rf {} + 2>/dev/null
+
+# 可选：清理代理内核（更干净）
+rm -rf feeds/packages/net/{xray*,v2ray*,hysteria*,tuic*,naiveproxy*,shadowsocks*,shadow-tls*} 2>/dev/null
+
+echo "==> Clean done"
 
 # ===== 修复 gn 包编译问题 =====
 echo "Applying gn package fix..."
