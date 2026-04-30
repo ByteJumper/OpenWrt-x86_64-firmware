@@ -1,10 +1,11 @@
 #
 # https://github.com/ByteJumper/OpenWrt-x86_64-firmware
 #
-# File: .github/workflows/openwrt-builder.yml
+# File: .github/workflows/test-builder.yml
 # Description: Build OpenWrt using GitHub Actions
 # Version: 1.1 (Two-step upload with artifact backup)
 # 
+
 
 name: Test Builter
 
@@ -114,8 +115,6 @@ jobs:
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
-        
-        # 列出固件文件
         echo "Available firmware files:"
         ls -lh *.img *.img.gz *.vmdk *.iso 2>/dev/null || echo "No firmware files found"
 
@@ -133,29 +132,27 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && steps.organize.outputs.status == 'success' && !cancelled()
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        cat > release.txt << EOF
-# OpenWrt Firmware Release
-
-## Build Information
-- **Build Date**: $(date +"%Y-%m-%d %H:%M:%S %Z")
-- **Repository**: ${{ github.repository }}
-- **Run ID**: ${{ github.run_id }}
-- **Source**: ${{ env.REPO_URL }} (${{ env.REPO_BRANCH }} branch)
-
-## Firmware Details
-- **Device**: ${{ env.DEVICE_NAME }}
-- **Target**: x86_64
-- **Filesystem**: SquashFS
-
-## Download
-Firmware files are attached below. If download fails, you can also get them from:
-GitHub Actions → Run #${{ github.run_id }} → Artifacts
-
-## Notes
-- Default IP: 192.168.100.2
-- Default password: (none)
-- This is an automated build from GitHub Actions
-EOF
+        echo "# OpenWrt Firmware Release" > release.txt
+        echo "" >> release.txt
+        echo "## Build Information" >> release.txt
+        echo "- **Build Date**: $(date +"%Y-%m-%d %H:%M:%S %Z")" >> release.txt
+        echo "- **Repository**: ${{ github.repository }}" >> release.txt
+        echo "- **Run ID**: ${{ github.run_id }}" >> release.txt
+        echo "- **Source**: ${{ env.REPO_URL }} (${{ env.REPO_BRANCH }} branch)" >> release.txt
+        echo "" >> release.txt
+        echo "## Firmware Details" >> release.txt
+        echo "- **Device**: ${{ env.DEVICE_NAME }}" >> release.txt
+        echo "- **Target**: x86_64" >> release.txt
+        echo "- **Filesystem**: SquashFS" >> release.txt
+        echo "" >> release.txt
+        echo "## Download" >> release.txt
+        echo "Firmware files are attached below. If download fails, you can also get them from:" >> release.txt
+        echo "GitHub Actions -> Run #${{ github.run_id }} -> Artifacts" >> release.txt
+        echo "" >> release.txt
+        echo "## Notes" >> release.txt
+        echo "- Default IP: 192.168.100.2" >> release.txt
+        echo "- Default password: (none)" >> release.txt
+        echo "- This is an automated build from GitHub Actions" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release (Primary)
@@ -166,7 +163,7 @@ EOF
       with:
         token: ${{ secrets.RELEASE_TOKEN }}
         tag_name: ${{ steps.tag.outputs.release_tag }}
-        name: "OpenWrt Firmware ${{ steps.tag.outputs.release_tag }}"
+        name: OpenWrt Firmware ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
         fail_on_unmatched_files: false
@@ -188,12 +185,12 @@ EOF
           echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo ""
           echo "To manually create a release later:"
-          echo "1. Go to Actions → This run → Artifacts"
+          echo "1. Go to Actions -> This run -> Artifacts"
           echo "2. Download OpenWrt_firmware_*"
           echo "3. Manually create a release and upload the files"
         fi
 
-    - name: Delete workflow runs (keep recent)
+    - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
       with:
         retain_days: 3
@@ -219,16 +216,14 @@ EOF
         echo "| Upload Artifact | ${{ steps.organize.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Create Release | ${{ steps.upload_release.outcome }} |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
         if [ "${{ steps.upload_release.outcome }}" != "success" ]; then
           echo "### ⚠️ Note" >> $GITHUB_STEP_SUMMARY
           echo "Release upload failed, but firmware is available as Artifact." >> $GITHUB_STEP_SUMMARY
-          echo "Download from: Actions → ${{ github.run_id }} → Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Download from: Actions -> ${{ github.run_id }} -> Artifacts" >> $GITHUB_STEP_SUMMARY
         else
           echo "### ✅ Success" >> $GITHUB_STEP_SUMMARY
           echo "Release created: https://github.com/${{ github.repository }}/releases/tag/${{ steps.tag.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
         fi
-        
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Firmware Files" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
