@@ -25,3 +25,18 @@ sed -i 's/OpenWrt/mRouter/g' package/base-files/files/bin/config_generate
 if [ -d files ]; then
     chmod -R 755 files
 fi
+
+# ===== 修复 gn 包编译问题 =====
+echo "Applying gn package fix..."
+# 查找 gn 的 Makefile
+GN_MAKEFILE=$(find . -path "*/gn/Makefile" 2>/dev/null | head -1)
+
+if [ -f "$GN_MAKEFILE" ]; then
+    echo "Found gn Makefile: $GN_MAKEFILE"
+    # 备份并修复
+    cp "$GN_MAKEFILE" "$GN_MAKEFILE.bak"
+    sed -i 's/+$(NINJA)/ninja/g' "$GN_MAKEFILE"
+    echo "gn Makefile fixed"
+else
+    echo "gn Makefile not found - this may cause compilation issues"
+fi
