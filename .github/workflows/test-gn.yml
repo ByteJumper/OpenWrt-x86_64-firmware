@@ -1,0 +1,295 @@
+# File: .github/workflows/test-gn.yml
+# Description: Test gn package compilation only
+# Usage: Run this first to verify fixes before full build
+
+name: Test GN Package
+
+on:
+  workflow_dispatch:  # 手动触发
+  push:
+    paths:
+      - 'diy-part*.sh'
+      - 'feeds.conf.default'
+      - '.github/workflows/test-gn.yml'
+
+env:
+  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
+
+jobs:
+  test-gn:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30  # gn 编译测试最多30分钟
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install -y \
+          build-essential \
+          ccache \
+          ecj \
+          fastjar \
+          file \
+          g++ \
+          gawk \
+          gettext \
+          git \
+          java-propose-classpath \
+          libelf-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libssl-dev \
+          python2.7 \
+          python3 \
+          python3-distutils \
+          python3-setuptools \
+          rsync \
+          swig \
+          time \
+          unzip \
+          wget \
+          xsltproc \
+          zlib1g-dev \
+          ninja-build \
+          cmake \
+          python3-pyelftools
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone source code
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Load custom feeds
+      run: |
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Check if gn package exists
+      id: check
+      run: |
+        cd openwrt
+        if [ -d "feeds/helloworld/gn" ]; then
+          echo "gn_exists=true" >> $GITHUB_OUTPUT
+          echo "✅ Found gn package in feeds/helloworld/gn"
+        elif [ -d "package/feeds/helloworld/gn" ]; then
+          echo "gn_exists=true" >> $GITHUB_OUTPUT
+          echo "✅ Found gn package in package/feeds/helloworld/gn"
+        else
+          echo "gn_exists=false" >> $GITHUB_OUTPUT
+          echo "⚠️ gn package not found"
+          find . -type d -name "gn" 2>/dev/null || echo "No gn directory found"
+        fi
+
+    - name: Apply gn fix (if Makefile exists)
+      if: steps.check.outputs.gn_exists == 'true'
+      run: |
+        cd openwrt
+        
+        # 查找 gn 的 Makefile
+        GN_MAKEFILE=$(find . -path "*/gn/Makefile" | head -1)
+        
+        if [ -f "$GN_MAKEFILE" ]; then
+          echo "📝 Found Makefile: $GN_MAKEFILE"
+          
+          # 备份原文件
+          cp "$GN_MAKEFILE" "$GN_MAKEFILE.bak"
+          
+          # 应用修复：将 +$(NINJA) 改为 ninja
+          sed -i 's/+$(NINJA)/ninja/g' "$GN_MAKEFILE"
+          
+          echo "✅ Applied fix: replaced \$(NINJA) with ninja"
+          echo "Changes:"
+          diff -u "$GN_MAKEFILE.bak" "$GN_MAKEFILE" || true
+        else
+          echo "⚠️ gn Makefile not found"
+          echo "Available gn directories:"
+          find . -type d -name "gn" 2>/dev/null
+        fi
+
+    - name: Configure OpenWrt
+      if: steps.check.outputs.gn_exists == 'true'
+      run: |
+        cd openwrt
+        
+        # 生成最小配置，只包含 helloworld 相关包
+        cat >> .config << 'EOF'
+CONFIG_TARGET_x86=y
+CONFIG_TARGET_x86_64=y
+CONFIG_TARGET_x86_64_Generic=y
+CONFIG_DEVEL=y
+CONFIG_BUSYBOX_CUSTOM=y
+CONFIG_BUSYBOX_CONFIG_MOUNT=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-app-ssr-plus=y
+CONFIG_PACKAGE_luci-app-openclash=y
+CONFIG_PACKAGE_luci-app-passwall=y
+EOF
+        
+        make defconfig
+        
+        echo "📋 .config summary:"
+        grep -E "CONFIG_TARGET|CONFIG_PACKAGE" .config | head -20
+
+    - name: Test compile gn package only
+      id: compile_gn
+      working-directory: /workdir/openwrt
+      run: |
+        echo "🏗️ Starting gn package compilation test..."
+        echo "========================================="
+        
+        # 方法1: 直接编译 host 版本的 gn
+        echo "Method 1: Compiling gn host tool..."
+        if make package/feeds/helloworld/gn/host/compile -j1 V=s 2>&1 | tee gn_compile.log; then
+          echo "✅ Method 1 succeeded!"
+          echo "gn_status=success" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        # 如果方法1失败，尝试方法2
+        echo ""
+        echo "⚠️ Method 1 failed, trying Method 2..."
+        echo "Method 2: Compiling with alternatives..."
+        
+        # 尝试清理后重新编译
+        make package/feeds/helloworld/gn/clean
+        make package/feeds/helloworld/gn/host/compile -j1 V=sc 2>&1 | tee gn_compile_method2.log
+        
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+          echo "✅ Method 2 succeeded!"
+          echo "gn_status=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Both methods failed!"
+          echo "gn_status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: Upload compile logs (if failed)
+      if: steps.compile_gn.outputs.gn_status != 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: gn-compile-logs
+        path: |
+          /workdir/openwrt/gn_compile*.log
+          /workdir/openwrt/logs/
+          /workdir/openwrt/tmp/
+        retention-days: 7
+
+    - name: Show error details
+      if: steps.compile_gn.outputs.gn_status != 'success'
+      run: |
+        echo "❌ GN Compilation Failed!"
+        echo ""
+        echo "Last 100 lines of error log:"
+        echo "================================"
+        if [ -f /workdir/openwrt/gn_compile.log ]; then
+          tail -100 /workdir/openwrt/gn_compile.log
+        elif [ -f /workdir/openwrt/gn_compile_method2.log ]; then
+          tail -100 /workdir/openwrt/gn_compile_method2.log
+        else
+          echo "No log file found"
+          # 尝试从 make 输出中获取错误
+          cd /workdir/openwrt
+          make package/feeds/helloworld/gn/host/compile -j1 V=sc 2>&1 | tail -50
+        fi
+
+    - name: Verify gn installation (if success)
+      if: steps.compile_gn.outputs.gn_status == 'success'
+      run: |
+        cd /workdir/openwrt
+        echo "✅ GN compilation test PASSED!"
+        echo ""
+        echo "🔍 Verifying gn binary..."
+        GN_BIN=$(find staging_dir/host/bin -name "gn" -type f 2>/dev/null | head -1)
+        if [ -f "$GN_BIN" ]; then
+          echo "✅ gn binary found: $GN_BIN"
+          file "$GN_BIN"
+          "$GN_BIN" --version 2>&1 || echo "gn version command not supported"
+        else
+          echo "⚠️ gn binary not found in staging_dir"
+          find . -name "gn" -type f 2>/dev/null | head -5
+        fi
+        
+        echo ""
+        echo "📊 Compilation statistics:"
+        echo "============================"
+        echo "Build time: $(($(date +%s) - $(date -r /workdir/openwrt/gn_compile.log +%s 2>/dev/null || echo 0))) seconds"
+
+    - name: Test full package build (optional)
+      if: steps.compile_gn.outputs.gn_status == 'success'
+      run: |
+        cd /workdir/openwrt
+        echo ""
+        echo "🧪 Optional: Testing full helloworld package build..."
+        if make package/feeds/helloworld/compile -j2 V=s 2>&1 | tee helloworld_build.log; then
+          echo "✅ Full helloworld package compilation succeeded!"
+          echo "full_test=success" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ Full helloworld compilation failed, but gn package itself works"
+          echo "full_test=failed" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build Summary - GN Test
+      if: always()
+      run: |
+        echo "## 🔧 GN Package Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Test | Status | Details |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| GN Package Found | ${{ steps.check.outputs.gn_exists }} | - |" >> $GITHUB_STEP_SUMMARY
+        echo "| GN Compilation | ${{ steps.compile_gn.outputs.gn_status }} | Single package test |" >> $GITHUB_STEP_SUMMARY
+        echo "| Full Package Test | ${{ steps.full_test.outputs.full_test }} | Optional |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.compile_gn.outputs.gn_status }}" == "success" ]; then
+          echo "### ✅ Test PASSED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The gn package compilation succeeded! You can now run the full build workflow." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Commit your changes (if any)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Run the main 'Test Builter' workflow" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor the full build for any other issues" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ❌ Test FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The gn package compilation failed. Check the logs above for details." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Troubleshooting tips:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check if ninja-build is installed correctly" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify the gn Makefile syntax" >> $GITHUB_STEP_SUMMARY
+          echo "3. Try compiling locally with: make package/feeds/helloworld/gn/host/compile -j1 V=s" >> $GITHUB_STEP_SUMMARY
+          echo "4. Download the 'gn-compile-logs' artifact for full logs" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📝 Notes" >> $GITHUB_STEP_SUMMARY
+        echo "- This test only compiles the gn package, not the full firmware" >> $GITHUB_STEP_SUMMARY
+        echo "- Test duration: ~30 minutes maximum" >> $GITHUB_STEP_SUMMARY
+        echo "- GN is a build dependency for several packages in helloworld feed" >> $GITHUB_STEP_SUMMARY
