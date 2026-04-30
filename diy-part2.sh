@@ -22,4 +22,6 @@ sed -i 's@.*CYXluq4wUazHjmCDBCqXF*@#&@g' package/lean/default-settings/files/zzz
 # Modify hostname
 sed -i 's/OpenWrt/mRouter/g' package/base-files/files/bin/config_generate
 
-chmod -R 755 files
+if [ -d files ]; then
+    chmod -R 755 files
+fi
