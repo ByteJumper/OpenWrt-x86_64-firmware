@@ -14,6 +14,6 @@
 #sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
 
 # Add a feed source
-echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
-echo 'src-git homeproxy https://github.com/immortalwrt/homeproxy.git' >>feeds.conf.default
-echo 'src-git openwrt-passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git' >>feeds.conf.default
+echo 'src-git helloworld https://github.com/fw876/helloworld' >> feeds.conf.default
+echo 'src-git homeproxy https://github.com/immortalwrt/homeproxy.git' >> feeds.conf.default
+echo 'src-git openwrt-passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git' >> feeds.conf.default
