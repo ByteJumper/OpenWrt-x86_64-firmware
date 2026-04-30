@@ -12,6 +12,8 @@ name: Test Builter
 on:
   repository_dispatch:
   workflow_dispatch:
+  # schedule:
+    # - cron: '0 0 * * 0'  # 每周自动编译（可选）
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
@@ -28,6 +30,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
 
     steps:
     - name: Checkout
