@@ -1,6 +1,6 @@
 # File: .github/workflows/test-gn.yml
 # Description: Test gn package compilation only
-# Usage: Run this first to verify fixes before full build
+# Usage: Run this first to verify fixes before full bu ild
 
 name: Test GN Package
 
