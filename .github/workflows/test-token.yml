@@ -1,0 +1,244 @@
+name: Test GitHub Token Permissions
+
+on:
+  workflow_dispatch:
+    inputs:
+      token_type:
+        description: 'Token to test'
+        required: true
+        default: 'RELEASE_TOKEN'
+        type: choice
+        options:
+          - RELEASE_TOKEN
+          - GITHUB_TOKEN
+          - CUSTOM_TOKEN
+
+env:
+  RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  test-token:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Get token value
+      id: get_token
+      run: |
+        if [ "${{ github.event.inputs.token_type }}" == "RELEASE_TOKEN" ]; then
+          echo "token=${{ secrets.RELEASE_TOKEN }}" >> $GITHUB_OUTPUT
+          echo "token_name=RELEASE_TOKEN" >> $GITHUB_OUTPUT
+        elif [ "${{ github.event.inputs.token_type }}" == "GITHUB_TOKEN" ]; then
+          echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+          echo "token_name=GITHUB_TOKEN" >> $GITHUB_OUTPUT
+        else
+          echo "token=${{ secrets.CUSTOM_TOKEN }}" >> $GITHUB_OUTPUT
+          echo "token_name=CUSTOM_TOKEN" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Test token basic info
+      run: |
+        echo "Testing token: ${{ steps.get_token.outputs.token_name }}"
+        echo "Token length: ${{ secrets.RELEASE_TOKEN != '' && 'Set' || 'Not Set' }}"
+        
+        # 检查 token 是否为空
+        if [ -z "${{ steps.get_token.outputs.token }}" ]; then
+          echo "❌ Token is empty or not set!"
+          exit 1
+        fi
+        echo "✅ Token is set"
+    
+    - name: Test GitHub API - Get user info
+      run: |
+        echo "Testing token authentication..."
+        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/user)
+        
+        if [ "$RESPONSE" == "200" ]; then
+          echo "✅ Token authentication successful"
+          
+          # 获取用户名
+          USERNAME=$(curl -s -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+            https://api.github.com/user | jq -r .login)
+          echo "Authenticated as: $USERNAME"
+        else
+          echo "❌ Token authentication failed with status: $RESPONSE"
+          exit 1
+        fi
+    
+    - name: Test repository permissions
+      run: |
+        REPO="${{ github.repository }}"
+        echo "Testing permissions for repo: $REPO"
+        
+        # 测试 repo 访问权限
+        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/$REPO)
+        
+        if [ "$RESPONSE" == "200" ]; then
+          echo "✅ Repository access successful"
+        else
+          echo "❌ Repository access failed with status: $RESPONSE"
+          exit 1
+        fi
+    
+    - name: Test create release permission
+      id: test_release
+      run: |
+        REPO="${{ github.repository }}"
+        TEST_TAG="test-token-$(date +%s)"
+        
+        echo "Testing create release permission..."
+        
+        # 尝试创建测试 release
+        RESPONSE=$(curl -s -X POST \
+          -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/$REPO/releases \
+          -d '{
+            "tag_name": "'$TEST_TAG'",
+            "name": "Token Test Release",
+            "body": "This is a test release to verify token permissions",
+            "draft": true,
+            "prerelease": true
+          }')
+        
+        # 检查是否成功
+        if echo "$RESPONSE" | jq -e '.id' > /dev/null 2>&1; then
+          RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id')
+          echo "✅ Create release permission: SUCCESS"
+          echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          echo "test_tag=$TEST_TAG" >> $GITHUB_OUTPUT
+          
+          # 删除测试 release
+          echo "Cleaning up test release..."
+          DELETE_RESPONSE=$(curl -s -X DELETE \
+            -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/$REPO/releases/$RELEASE_ID)
+          echo "✅ Test release cleaned up"
+        else
+          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.message // "Unknown error"')
+          echo "❌ Create release permission: FAILED"
+          echo "Error: $ERROR_MSG"
+          
+          # 详细错误信息
+          if echo "$RESPONSE" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "Details: $(echo "$RESPONSE" | jq -r '.errors[].message')"
+          fi
+          exit 1
+        fi
+    
+    - name: Test upload asset permission
+      if: steps.test_release.outputs.release_id != ''
+      run: |
+        REPO="${{ github.repository }}"
+        RELEASE_ID="${{ steps.test_release.outputs.release_id }}"
+        
+        echo "Testing upload asset permission..."
+        
+        # 创建测试文件
+        echo "This is a test file" > test.txt
+        
+        # 尝试上传文件
+        RESPONSE=$(curl -s -X POST \
+          -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+          -H "Content-Type: application/octet-stream" \
+          "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=test.txt" \
+          --data-binary @test.txt)
+        
+        if echo "$RESPONSE" | jq -e '.id' > /dev/null 2>&1; then
+          echo "✅ Upload asset permission: SUCCESS"
+          ASSET_ID=$(echo "$RESPONSE" | jq -r '.id')
+          
+          # 删除测试 asset
+          curl -s -X DELETE \
+            -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/$REPO/releases/assets/$ASSET_ID
+        else
+          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.message // "Unknown error"')
+          echo "❌ Upload asset permission: FAILED"
+          echo "Error: $ERROR_MSG"
+          exit 1
+        fi
+    
+    - name: Test token scopes
+      run: |
+        echo "Checking token scopes..."
+        
+        # 获取 token 的权限范围
+        RESPONSE=$(curl -s -I \
+          -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+          https://api.github.com/user)
+        
+        SCOPES=$(echo "$RESPONSE" | grep -i "x-oauth-scopes" | cut -d' ' -f2-)
+        
+        if [ -n "$SCOPES" ]; then
+          echo "Token scopes: $SCOPES"
+          
+          # 检查必需的权限
+          if echo "$SCOPES" | grep -q "repo"; then
+            echo "✅ repo scope: present"
+          else
+            echo "⚠️  repo scope: missing (required for creating releases)"
+          fi
+          
+          if echo "$SCOPES" | grep -q "workflow"; then
+            echo "✅ workflow scope: present"
+          else
+            echo "⚠️  workflow scope: missing (optional for releases)"
+          fi
+        else
+          echo "⚠️  Could not determine token scopes (GITHUB_TOKEN may not show scopes)"
+        fi
+    
+    - name: Generate test report
+      if: always()
+      run: |
+        echo "========================================="
+        echo "Token Test Report"
+        echo "========================================="
+        echo "Token Name: ${{ steps.get_token.outputs.token_name }}"
+        echo "Test Status: ${{ job.status }}"
+        echo "========================================="
+        
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Token has required permissions for release creation!"
+          echo ""
+          echo "Recommendation: You can use this token in your OpenWrt build workflow."
+        else
+          echo "❌ Token does NOT have sufficient permissions!"
+          echo ""
+          echo "Required permissions for release creation:"
+          echo "  - repo: full repo access"
+          echo "  - (OR) public_repo for public repos"
+          echo ""
+          echo "To fix:"
+          echo "1. Go to GitHub Settings → Developer settings → Personal access tokens"
+          echo "2. Generate new token with 'repo' scope"
+          echo "3. Add to repository secrets as RELEASE_TOKEN"
+        fi
+
+    - name: Cleanup any remaining test releases
+      if: always()
+      run: |
+        REPO="${{ github.repository }}"
+        
+        # 删除所有以 "test-token-" 开头的 release tags
+        curl -s -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+          https://api.github.com/repos/$REPO/releases | \
+          jq -r '.[] | select(.tag_name | startswith("test-token-")) | .id' | \
+          while read release_id; do
+            echo "Cleaning up test release: $release_id"
+            curl -s -X DELETE \
+              -H "Authorization: token ${{ steps.get_token.outputs.token }}" \
+              https://api.github.com/repos/$REPO/releases/$release_id
+          done
