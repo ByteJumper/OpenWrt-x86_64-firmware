@@ -6,11 +6,6 @@ name: Test GN Package
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'diy-part*.sh'
-      - 'feeds.conf.default'
-      - '.github/workflows/test-gn.yml'
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
