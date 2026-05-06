@@ -7,7 +7,7 @@
 # 
 
 
-name: Test Builter
+name: Lede Builter
 
 on:
   repository_dispatch:
